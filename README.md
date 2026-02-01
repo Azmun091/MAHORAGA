@@ -293,7 +293,7 @@ The agent only trades during market hours (9:30 AM - 4:00 PM ET, Mon-Fri). It ga
 ┌─────────────────────────────────────────────────────────────────┐
 │  SECTION 1: DATA SOURCE (customize this)                        │
 │  - StockTwitsAgent class                                        │
-│  - Add your own: Reddit, Twitter, news APIs, etc.               │
+│  - Add your own: news APIs, custom signals, etc.                │
 ├─────────────────────────────────────────────────────────────────┤
 │  SECTION 2: TRADING STRATEGY (customize this)                   │
 │  - runTradingLogic() method                                     │
@@ -324,7 +324,7 @@ The MCP server provides these tools for your agents:
 
 ### Ideas for Extension
 
-1. **Add more data sources**: Reddit, Twitter/X, news APIs, SEC filings
+1. **Add more data sources**: News APIs, SEC filings, custom signals
 2. **Enhance LLM prompts**: Add technical analysis, fundamentals, news context
 3. **Multi-source confirmation**: Require 2+ sources to agree before trading
 4. **Options trading**: The MCP server supports options via Alpaca

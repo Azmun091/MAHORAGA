@@ -32,7 +32,6 @@ function getAgentColor(agent: string): string {
     'Analyst': 'text-hud-purple',
     'Executor': 'text-hud-cyan',
     'StockTwits': 'text-hud-success',
-    'Reddit': 'text-hud-warning',
     'SignalResearch': 'text-hud-cyan',
     'PositionResearch': 'text-hud-purple',
     'System': 'text-hud-text-dim',

@@ -160,8 +160,6 @@ class ActivityLogger {
 //   This is where signals come from. Currently uses StockTwits (free, no API key).
 //   
 //   TO CUSTOMIZE: Add your own data sources here. Examples:
-//   - Reddit API (r/wallstreetbets, r/stocks)
-//   - Twitter/X API 
 //   - News APIs (NewsAPI, Polygon, Alpha Vantage)
 //   - Your own proprietary signals
 //
@@ -579,7 +577,6 @@ class SimpleOrchestrator {
       // v1 doesn't have advanced features
       signalResearch: {},
       positionResearch: {},
-      twitterConfirmations: {},
       stalenessAnalysis: {},
       positionTracking: {},
       optionsEnabled: false,

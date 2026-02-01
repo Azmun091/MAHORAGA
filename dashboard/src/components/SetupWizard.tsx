@@ -67,7 +67,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
             <div className="space-y-4 text-sm text-hud-text">
               <div className="flex items-start gap-3">
                 <span className="text-hud-success">1.</span>
-                <span>Monitors StockTwits and Reddit for sentiment signals</span>
+                <span>Monitors StockTwits for sentiment signals</span>
               </div>
               <div className="flex items-start gap-3">
                 <span className="text-hud-success">2.</span>
