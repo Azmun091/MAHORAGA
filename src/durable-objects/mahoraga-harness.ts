@@ -2025,6 +2025,21 @@ Response format:
     confidence: number,
     account: Account
   ): Promise<boolean> {
+    if (!symbol || symbol.trim().length === 0) {
+      this.log("Executor", "buy_blocked", { reason: "INVARIANT: Empty symbol" });
+      return false;
+    }
+
+    if (account.cash <= 0) {
+      this.log("Executor", "buy_blocked", { symbol, reason: "INVARIANT: No cash available", cash: account.cash });
+      return false;
+    }
+
+    if (confidence <= 0 || confidence > 1 || !Number.isFinite(confidence)) {
+      this.log("Executor", "buy_blocked", { symbol, reason: "INVARIANT: Invalid confidence", confidence });
+      return false;
+    }
+
     const sizePct = Math.min(20, this.state.config.position_size_pct_of_cash);
     const positionSize = Math.min(
       account.cash * (sizePct / 100) * confidence,
@@ -2033,6 +2048,17 @@ Response format:
 
     if (positionSize < 100) {
       this.log("Executor", "buy_skipped", { symbol, reason: "Position too small" });
+      return false;
+    }
+
+    const maxAllowed = this.state.config.max_position_value * 1.01;
+    if (positionSize <= 0 || positionSize > maxAllowed || !Number.isFinite(positionSize)) {
+      this.log("Executor", "buy_blocked", {
+        symbol,
+        reason: "INVARIANT: Invalid position size",
+        positionSize,
+        maxAllowed,
+      });
       return false;
     }
 
@@ -2062,11 +2088,20 @@ Response format:
     symbol: string,
     reason: string
   ): Promise<boolean> {
+    if (!symbol || symbol.trim().length === 0) {
+      this.log("Executor", "sell_blocked", { reason: "INVARIANT: Empty symbol" });
+      return false;
+    }
+
+    if (!reason || reason.trim().length === 0) {
+      this.log("Executor", "sell_blocked", { symbol, reason: "INVARIANT: No sell reason provided" });
+      return false;
+    }
+
     try {
       await alpaca.trading.closePosition(symbol);
       this.log("Executor", "sell_executed", { symbol, reason });
 
-      // Clean up tracking
       delete this.state.positionEntries[symbol];
       delete this.state.socialHistory[symbol];
       delete this.state.stalenessAnalysis[symbol];
