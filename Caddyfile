@@ -1,0 +1,18 @@
+# MAHORAGA HTTPS Configuration with Tailscale
+# This Caddyfile configures HTTPS routing for MAHORAGA services
+# Uses the same Tailscale domain as multimodal-autotrader
+
+autotrader.tail3a7fed.ts.net {
+    tls autotrader.tail3a7fed.ts.net.crt autotrader.tail3a7fed.ts.net.key
+
+    # MAHORAGA API - Worker endpoints
+    handle /mahoraga/api/* {
+        uri strip_prefix /mahoraga/api
+        reverse_proxy localhost:8787
+    }
+
+    # MAHORAGA Dashboard - everything else under /mahoraga
+    handle /mahoraga/* {
+        reverse_proxy localhost:4173
+    }
+}

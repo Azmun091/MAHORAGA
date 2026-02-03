@@ -23,7 +23,7 @@ interface UseTooltipReturn<T extends HTMLElement> {
   tooltipProps: {
     isVisible: boolean
     coords: TooltipCoords
-    position: TooltipPosition
+    actualPosition: TooltipPosition
   }
 }
 
@@ -33,6 +33,7 @@ export function useTooltip<T extends HTMLElement = HTMLElement>(
   const { position = 'top', delay = 200 } = options
   const [isVisible, setIsVisible] = useState(false)
   const [coords, setCoords] = useState<TooltipCoords>({ top: 0, left: 0 })
+  const [actualPosition, setActualPosition] = useState<TooltipPosition>(position)
   const triggerRef = useRef<T>(null)
   const timeoutRef = useRef<number | null>(null)
 
@@ -43,30 +44,95 @@ export function useTooltip<T extends HTMLElement = HTMLElement>(
     const scrollY = window.scrollY
     const scrollX = window.scrollX
     const padding = 8
+    const tooltipWidth = 280 // Estimated tooltip width
+    const tooltipHeight = 200 // Estimated tooltip height
+    const viewportWidth = window.innerWidth
+    const viewportHeight = window.innerHeight
+
+    // Find the container (parent with overflow)
+    let container = triggerRef.current.parentElement
+    let containerRect: DOMRect | null = null
+    while (container) {
+      const style = window.getComputedStyle(container)
+      if (style.overflow !== 'visible' && style.overflowY !== 'visible') {
+        containerRect = container.getBoundingClientRect()
+        break
+      }
+      container = container.parentElement
+    }
+
+    // Use container bounds if found, otherwise use viewport
+    const boundsLeft = containerRect ? containerRect.left + scrollX : scrollX
+    const boundsRight = containerRect ? containerRect.right + scrollX : scrollX + viewportWidth
+    const boundsTop = containerRect ? containerRect.top + scrollY : scrollY
+    const boundsBottom = containerRect ? containerRect.bottom + scrollY : scrollY + viewportHeight
 
     let top = 0
     let left = 0
+    let actualPosition = position
 
+    // Calculate initial position
     switch (position) {
       case 'top':
         top = rect.top + scrollY - padding
         left = rect.left + scrollX + rect.width / 2
+        // Check if tooltip goes above bounds
+        if (top - tooltipHeight < boundsTop) {
+          actualPosition = 'bottom'
+          top = rect.bottom + scrollY + padding
+        }
         break
       case 'bottom':
         top = rect.bottom + scrollY + padding
         left = rect.left + scrollX + rect.width / 2
+        // Check if tooltip goes below bounds
+        if (top + tooltipHeight > boundsBottom) {
+          actualPosition = 'top'
+          top = rect.top + scrollY - padding
+        }
         break
       case 'left':
         top = rect.top + scrollY + rect.height / 2
         left = rect.left + scrollX - padding
+        // Check if tooltip goes left of bounds
+        if (left - tooltipWidth < boundsLeft) {
+          actualPosition = 'right'
+          left = rect.right + scrollX + padding
+        }
         break
       case 'right':
         top = rect.top + scrollY + rect.height / 2
         left = rect.right + scrollX + padding
+        // Check if tooltip goes right of bounds
+        if (left + tooltipWidth > boundsRight) {
+          actualPosition = 'left'
+          left = rect.left + scrollX - padding
+        }
         break
     }
 
+    // Adjust horizontal position to stay within bounds
+    if (actualPosition === 'top' || actualPosition === 'bottom') {
+      const halfTooltipWidth = tooltipWidth / 2
+      if (left - halfTooltipWidth < boundsLeft) {
+        left = boundsLeft + halfTooltipWidth + padding
+      } else if (left + halfTooltipWidth > boundsRight) {
+        left = boundsRight - halfTooltipWidth - padding
+      }
+    }
+
+    // Adjust vertical position to stay within bounds
+    if (actualPosition === 'left' || actualPosition === 'right') {
+      const halfTooltipHeight = tooltipHeight / 2
+      if (top - halfTooltipHeight < boundsTop) {
+        top = boundsTop + halfTooltipHeight + padding
+      } else if (top + halfTooltipHeight > boundsBottom) {
+        top = boundsBottom - halfTooltipHeight - padding
+      }
+    }
+
     setCoords({ top, left })
+    setActualPosition(actualPosition)
   }, [position])
 
   const handleMouseEnter = useCallback(() => {
@@ -93,7 +159,7 @@ export function useTooltip<T extends HTMLElement = HTMLElement>(
     tooltipProps: {
       isVisible,
       coords,
-      position,
+      actualPosition,
     },
   }
 }
@@ -101,7 +167,7 @@ export function useTooltip<T extends HTMLElement = HTMLElement>(
 interface TooltipPortalProps {
   isVisible: boolean
   coords: TooltipCoords
-  position: TooltipPosition
+  actualPosition: TooltipPosition
   content: ReactNode
   className?: string
 }
@@ -124,7 +190,7 @@ function getTransform(position: TooltipPosition) {
   }
 }
 
-export function TooltipPortal({ isVisible, coords, position, content, className = '' }: TooltipPortalProps) {
+export function TooltipPortal({ isVisible, coords, actualPosition, content, className = '' }: TooltipPortalProps) {
   return createPortal(
     <AnimatePresence>
       {isVisible && (
@@ -137,8 +203,8 @@ export function TooltipPortal({ isVisible, coords, position, content, className 
             position: 'absolute',
             top: coords.top,
             left: coords.left,
-            transform: getTransform(position),
-            transformOrigin: getTransformOrigin(position),
+            transform: getTransform(actualPosition),
+            transformOrigin: getTransformOrigin(actualPosition),
             zIndex: 9999,
           }}
           className={`

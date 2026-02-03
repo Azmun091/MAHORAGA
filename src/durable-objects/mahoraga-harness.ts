@@ -167,6 +167,8 @@ interface ResearchResult {
   red_flags: string[];
   catalysts: string[];
   timestamp: number;
+  price?: number;
+  sentiment?: number;
 }
 
 interface TwitterConfirmation {
@@ -432,6 +434,10 @@ export class MahoragaHarness extends DurableObject<Env> {
       const stored = await this.ctx.storage.get<AgentState>("state");
       if (stored) {
         this.state = { ...DEFAULT_STATE, ...stored };
+        // If agent is enabled, ensure alarm is scheduled
+        if (this.state.enabled) {
+          await this.scheduleNextAlarm();
+        }
       }
     });
   }
@@ -521,6 +527,8 @@ export class MahoragaHarness extends DurableObject<Env> {
       await this.persist();
     } catch (error) {
       this.log("System", "alarm_error", { error: String(error) });
+      // Persist even on error to save logs
+      await this.persist();
     }
     
     await this.scheduleNextAlarm();
@@ -1130,6 +1138,8 @@ JSON response:
         red_flags: analysis.red_flags || [],
         catalysts: analysis.catalysts || [],
         timestamp: Date.now(),
+        price: price > 0 ? price : undefined,
+        sentiment: sentiment,
       };
 
       this.state.signalResearch[symbol] = result;
@@ -1443,8 +1453,16 @@ JSON response:
 
     try {
       const alpaca = createAlpacaProviders(this.env);
-      const quote = await alpaca.marketData.getQuote(symbol).catch(() => null);
-      const price = quote?.ask_price || quote?.bid_price || 0;
+      // Try to get price from snapshot first (more reliable), fallback to quote
+      let price = 0;
+      try {
+        const snapshot = await alpaca.marketData.getSnapshot(symbol);
+        price = snapshot.latest_trade?.price || snapshot.daily_bar?.c || 0;
+      } catch {
+        // If snapshot fails, try quote
+        const quote = await alpaca.marketData.getQuote(symbol).catch(() => null);
+        price = quote?.ask_price || quote?.bid_price || 0;
+      }
 
       const prompt = `Should we BUY this stock based on social sentiment and fundamentals?
 
@@ -1500,6 +1518,8 @@ JSON response:
         red_flags: analysis.red_flags || [],
         catalysts: analysis.catalysts || [],
         timestamp: Date.now(),
+        price: price > 0 ? price : undefined,
+        sentiment: sentimentScore,
       };
 
       this.state.signalResearch[symbol] = result;
@@ -2420,6 +2440,14 @@ Response format:
     
     // Log to console for wrangler tail
     console.log(`[${entry.timestamp}] [${agent}] ${action}`, JSON.stringify(details));
+    
+    // Persist logs periodically (every 10 logs) to ensure they're saved even if worker restarts
+    // This is a fire-and-forget operation to avoid blocking
+    if (this.state.logs.length % 10 === 0) {
+      this.persist().catch(err => {
+        console.error("[MahoragaHarness] Failed to persist logs:", err);
+      });
+    }
   }
 
   public trackLLMCost(model: string, tokensIn: number, tokensOut: number): number {

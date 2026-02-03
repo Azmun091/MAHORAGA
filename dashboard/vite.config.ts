@@ -5,8 +5,10 @@ import tailwindcss from '@tailwindcss/vite'
 const wranglerPort = process.env.WRANGLER_PORT || '8787'
 
 export default defineConfig({
+  base: '/mahoraga/', // Base path for serving under /mahoraga/
   plugins: [react(), tailwindcss()],
   server: {
+    host: true,
     port: 3000,
     proxy: {
       '/api': {
@@ -15,5 +17,15 @@ export default defineConfig({
         rewrite: (path) => path.replace(/^\/api/, '/agent'),
       },
     },
+  },
+  preview: {
+    host: true,
+    port: 4173,
+    allowedHosts: [
+      'autotrader',
+      'autotrader.tail3a7fed.ts.net',
+      'fd7a:115c:a1e0::bf01:e18d',
+      '100.74.225.124',
+    ],
   },
 })
