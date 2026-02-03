@@ -229,7 +229,7 @@ export function Sparkline({
       <path
         d={pathD}
         fill="none"
-        stroke={isPositive ? variantColors.green.stroke : variantColors.red.stroke}
+        stroke={colors.stroke}
         strokeWidth={1}
         strokeLinecap="round"
         strokeLinejoin="round"

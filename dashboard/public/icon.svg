@@ -1,0 +1,19 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a0c0e;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1a1c1e;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="512" height="512" fill="url(#bg)" rx="64"/>
+  
+  <!-- MAHORAGA Text -->
+  <text x="256" y="280" font-family="'JetBrains Mono', monospace" font-size="72" font-weight="500" fill="#7a9ba8" text-anchor="middle" letter-spacing="0.1em">M</text>
+  <text x="256" y="360" font-family="'JetBrains Mono', monospace" font-size="48" font-weight="300" fill="#4a5a62" text-anchor="middle" letter-spacing="0.15em">MAHORAGA</text>
+  
+  <!-- Decorative line -->
+  <line x1="128" y1="200" x2="384" y2="200" stroke="#7a9ba8" stroke-width="2" opacity="0.3"/>
+  <line x1="128" y1="400" x2="384" y2="400" stroke="#7a9ba8" stroke-width="2" opacity="0.3"/>
+</svg>

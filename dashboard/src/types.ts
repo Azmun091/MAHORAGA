@@ -113,6 +113,7 @@ export interface SignalResearch {
   catalysts: string[]
   sentiment: number
   timestamp: number
+  price?: number
 }
 
 export interface PositionResearch {

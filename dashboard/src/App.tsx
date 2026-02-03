@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import clsx from 'clsx'
 import { Panel } from './components/Panel'
@@ -11,7 +11,8 @@ import { NotificationBell } from './components/NotificationBell'
 import { Tooltip, TooltipContent } from './components/Tooltip'
 import type { Status, Config, LogEntry, Signal, Position, SignalResearch, PortfolioSnapshot } from './types'
 
-const API_BASE = '/api'
+// API base path - Caddy will proxy /mahoraga/api/* to the worker
+const API_BASE = '/mahoraga/api'
 
 function getApiToken(): string {
   return localStorage.getItem('mahoraga_api_token') || (window as unknown as { VITE_MAHORAGA_API_TOKEN?: string }).VITE_MAHORAGA_API_TOKEN || ''
@@ -131,6 +132,9 @@ export default function App() {
   const [setupChecked, setSetupChecked] = useState(false)
   const [time, setTime] = useState(new Date())
   const [portfolioHistory, setPortfolioHistory] = useState<PortfolioSnapshot[]>([])
+  const [tokenInput, setTokenInput] = useState(localStorage.getItem('mahoraga_api_token') || '')
+  const [isSavingToken, setIsSavingToken] = useState(false)
+  const logsEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const checkSetup = async () => {
@@ -146,6 +150,14 @@ export default function App() {
       }
     }
     checkSetup()
+  }, [])
+
+  // Sync token input with localStorage
+  useEffect(() => {
+    const storedToken = localStorage.getItem('mahoraga_api_token') || ''
+    if (storedToken !== tokenInput) {
+      setTokenInput(storedToken)
+    }
   }, [])
 
   useEffect(() => {
@@ -194,6 +206,14 @@ export default function App() {
       }
     }
   }, [setupChecked, showSetup])
+
+  useEffect(() => {
+    // Only autoscroll on desktop devices, not on mobile
+    const isMobile = window.matchMedia('(max-width: 768px)').matches
+    if (!isMobile && logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [status?.logs])
 
   const handleSaveConfig = async (config: Config) => {
     const res = await authFetch(`${API_BASE}/config`, {
@@ -265,8 +285,41 @@ export default function App() {
     return <SetupWizard onComplete={() => setShowSetup(false)} />
   }
 
+  const handleSaveToken = async () => {
+    if (!tokenInput.trim()) {
+      return
+    }
+    
+    setIsSavingToken(true)
+    // Save token to localStorage
+    localStorage.setItem('mahoraga_api_token', tokenInput.trim())
+    
+    // Wait a moment to ensure localStorage is written
+    await new Promise(resolve => setTimeout(resolve, 100))
+    
+    // Clear error and retry fetch instead of reloading
+    setError(null)
+    
+    // Trigger a status fetch
+    try {
+      const res = await authFetch(`${API_BASE}/status`)
+      const data = await res.json()
+      if (data.ok) {
+        setStatus(data.data)
+        setError(null)
+      } else {
+        setError(data.error || 'Failed to fetch status')
+      }
+    } catch (err) {
+      setError('Connection failed - is the agent running?')
+    } finally {
+      setIsSavingToken(false)
+    }
+  }
+
   if (error && !status) {
     const isAuthError = error.includes('Unauthorized')
+
     return (
       <div className="min-h-screen bg-hud-bg flex items-center justify-center p-6">
         <Panel title={isAuthError ? "AUTHENTICATION REQUIRED" : "CONNECTION ERROR"} className="max-w-md w-full">
@@ -281,14 +334,21 @@ export default function App() {
                     type="password"
                     className="hud-input w-full mb-2"
                     placeholder="Enter MAHORAGA_API_TOKEN"
-                    defaultValue={localStorage.getItem('mahoraga_api_token') || ''}
-                    onChange={(e) => localStorage.setItem('mahoraga_api_token', e.target.value)}
+                    value={tokenInput}
+                    onChange={(e) => setTokenInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && tokenInput.trim() && !isSavingToken) {
+                        handleSaveToken()
+                      }
+                    }}
+                    disabled={isSavingToken}
                   />
                   <button 
-                    onClick={() => window.location.reload()}
-                    className="hud-button w-full"
+                    onClick={handleSaveToken}
+                    disabled={isSavingToken || !tokenInput.trim()}
+                    className="hud-button w-full disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    Save & Reload
+                    {isSavingToken ? 'Connecting...' : 'Save & Connect'}
                   </button>
                 </div>
                 <p className="text-hud-text-dim text-xs">
@@ -564,7 +624,7 @@ export default function App() {
                   signals.slice(0, 20).map((sig: Signal, i: number) => (
                     <Tooltip
                       key={`${sig.symbol}-${sig.source}-${i}`}
-                      position="right"
+                      position="left"
                       content={
                         <TooltipContent
                           title={`${sig.symbol} - ${sig.source.toUpperCase()}`}
@@ -669,12 +729,20 @@ export default function App() {
                               <span className="text-hud-text-dim">Confidence</span>
                               <span className="text-hud-text-bright">{(research.confidence * 100).toFixed(0)}%</span>
                             </div>
-                            <div className="flex justify-between">
-                              <span className="text-hud-text-dim">Sentiment</span>
-                              <span className={getSentimentColor(research.sentiment)}>
-                                {(research.sentiment * 100).toFixed(0)}%
-                              </span>
-                            </div>
+                            {research.sentiment !== undefined && !isNaN(research.sentiment) && (
+                              <div className="flex justify-between">
+                                <span className="text-hud-text-dim">Sentiment</span>
+                                <span className={getSentimentColor(research.sentiment)}>
+                                  {(research.sentiment * 100).toFixed(0)}%
+                                </span>
+                              </div>
+                            )}
+                            {research.price && research.price > 0 && (
+                              <div className="flex justify-between">
+                                <span className="text-hud-text-dim">Price</span>
+                                <span className="text-hud-text-bright">{formatCurrency(research.price)}</span>
+                              </div>
+                            )}
                             <div className="flex justify-between">
                               <span className="text-hud-text-dim">Analyzed</span>
                               <span className="text-hud-text">
