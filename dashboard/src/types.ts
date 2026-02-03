@@ -62,11 +62,12 @@ export interface Config {
   take_profit_pct: number
   stop_loss_pct: number
   position_size_pct_of_cash: number
+  llm_provider?: 'openai-raw' | 'ai-sdk' | 'cloudflare-gateway'
   llm_model: string
   llm_analyst_model?: string
   llm_max_tokens: number
   starting_equity?: number
-  
+
   // Stale position management
   stale_position_enabled?: boolean
   stale_min_hold_hours?: number
@@ -76,7 +77,7 @@ export interface Config {
   stale_mid_min_gain_pct?: number
   stale_social_volume_decay?: number
   stale_no_mentions_hours?: number
-  
+
   // Options config
   options_enabled?: boolean
   options_min_confidence?: number
@@ -90,7 +91,7 @@ export interface Config {
   options_stop_loss_pct?: number
   options_take_profit_pct?: number
   options_max_positions?: number
-  
+
   // Crypto trading config (24/7)
   crypto_enabled?: boolean
   crypto_symbols?: string[]
@@ -98,6 +99,9 @@ export interface Config {
   crypto_max_position_value?: number
   crypto_take_profit_pct?: number
   crypto_stop_loss_pct?: number
+
+  // Custom ticker blacklist (insider trading restrictions, etc.)
+  ticker_blacklist?: string[]
 }
 
 export interface SignalResearch {
