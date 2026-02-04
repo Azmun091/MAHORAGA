@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { AgentConfigSchema, validateAgentConfig, safeValidateAgentConfig } from "./agent-config";
+import { describe, expect, it } from "vitest";
+import { AgentConfigSchema, safeValidateAgentConfig, validateAgentConfig } from "./agent-config";
 
 function createValidConfig() {
   return {
@@ -145,7 +145,7 @@ describe("AgentConfigSchema", () => {
       const result = AgentConfigSchema.safeParse(config);
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error.issues.some(i => i.path.includes("options_min_delta"))).toBe(true);
+        expect(result.error.issues.some((i) => i.path.includes("options_min_delta"))).toBe(true);
       }
     });
 
