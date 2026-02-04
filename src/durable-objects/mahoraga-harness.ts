@@ -2214,7 +2214,6 @@ JSON response:
       let price = 0;
       if (isCrypto) {
         const normalized = normalizeCryptoSymbol(symbol);
-<<<<<<< HEAD
         try {
           const snapshot = await alpaca.marketData.getCryptoSnapshot(normalized);
           price = snapshot.latest_trade?.price || snapshot.daily_bar?.c || 0;
