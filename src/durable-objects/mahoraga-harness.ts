@@ -59,7 +59,6 @@ interface AgentConfig {
   max_positions: number; // [TUNE] Max concurrent positions
   min_sentiment_score: number; // [TUNE] Min sentiment to consider buying (0-1)
   min_analyst_confidence: number; // [TUNE] Min LLM confidence to execute (0-1)
-  sell_sentiment_threshold: number; // [TUNE] Sentiment below this triggers sell review
 
   // Risk management - take profit and stop loss
   take_profit_pct: number; // [TUNE] Take profit at this % gain
@@ -74,20 +73,17 @@ interface AgentConfig {
   stale_mid_hold_days: number;
   stale_mid_min_gain_pct: number;
   stale_social_volume_decay: number; // [TUNE] Exit if volume drops to this % of entry
-  stale_no_mentions_hours: number; // [TUNE] Exit if no mentions for N hours
 
   // LLM configuration
   llm_provider: "openai-raw" | "ai-sdk" | "cloudflare-gateway"; // [TUNE] Provider: openai-raw, ai-sdk, cloudflare-gateway
   llm_model: string; // [TUNE] Model for quick research (gpt-4o-mini)
   llm_analyst_model: string; // [TUNE] Model for deep analysis (gpt-4o)
-  llm_max_tokens: number;
   llm_min_hold_minutes: number; // [TUNE] Min minutes before LLM can recommend sell (default: 30)
 
   // Options trading - trade options instead of shares for high-conviction plays
   options_enabled: boolean; // [TOGGLE] Enable/disable options trading
   options_min_confidence: number; // [TUNE] Higher threshold for options (riskier)
   options_max_pct_per_trade: number;
-  options_max_total_exposure: number;
   options_min_dte: number; // [TUNE] Minimum days to expiration
   options_max_dte: number; // [TUNE] Maximum days to expiration
   options_target_delta: number; // [TUNE] Target delta (0.3-0.5 typical)
@@ -95,7 +91,6 @@ interface AgentConfig {
   options_max_delta: number;
   options_stop_loss_pct: number; // [TUNE] Options stop loss (wider than stocks)
   options_take_profit_pct: number; // [TUNE] Options take profit (higher targets)
-  options_max_positions: number;
 
   // Crypto trading - 24/7 momentum-based crypto trading
   crypto_enabled: boolean; // [TOGGLE] Enable/disable crypto trading
@@ -273,7 +268,6 @@ const DEFAULT_CONFIG: AgentConfig = {
   max_positions: 5,
   min_sentiment_score: 0.3,
   min_analyst_confidence: 0.6,
-  sell_sentiment_threshold: -0.2,
   take_profit_pct: 10,
   stop_loss_pct: 5,
   position_size_pct_of_cash: 25,
@@ -284,16 +278,13 @@ const DEFAULT_CONFIG: AgentConfig = {
   stale_mid_hold_days: 2,
   stale_mid_min_gain_pct: 3,
   stale_social_volume_decay: 0.3,
-  stale_no_mentions_hours: 24,
   llm_provider: "openai-raw",
   llm_model: "gpt-4o-mini",
   llm_analyst_model: "gpt-4o",
-  llm_max_tokens: 500,
   llm_min_hold_minutes: 30,
   options_enabled: false,
   options_min_confidence: 0.8,
   options_max_pct_per_trade: 0.02,
-  options_max_total_exposure: 0.1,
   options_min_dte: 30,
   options_max_dte: 60,
   options_target_delta: 0.45,
@@ -301,7 +292,6 @@ const DEFAULT_CONFIG: AgentConfig = {
   options_max_delta: 0.7,
   options_stop_loss_pct: 50,
   options_take_profit_pct: 100,
-  options_max_positions: 3,
   crypto_enabled: false,
   crypto_symbols: ["BTC/USD", "ETH/USD", "SOL/USD"],
   crypto_momentum_threshold: 2.0,

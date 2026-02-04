@@ -9,7 +9,6 @@ export const AgentConfigSchema = z
     max_positions: z.number().int().min(1).max(50),
     min_sentiment_score: z.number().min(0).max(1),
     min_analyst_confidence: z.number().min(0).max(1),
-    sell_sentiment_threshold: z.number().min(-1).max(1),
 
     take_profit_pct: z.number().min(1).max(100),
     stop_loss_pct: z.number().min(1).max(50),
@@ -22,17 +21,14 @@ export const AgentConfigSchema = z
     stale_mid_hold_days: z.number().min(1).max(30),
     stale_mid_min_gain_pct: z.number().min(0).max(100),
     stale_social_volume_decay: z.number().min(0).max(1),
-    stale_no_mentions_hours: z.number().min(1).max(168),
 
     llm_provider: z.enum(["openai-raw", "ai-sdk", "cloudflare-gateway"]),
     llm_model: z.string().min(1),
     llm_analyst_model: z.string().min(1),
-    llm_max_tokens: z.number().int().min(100).max(32000),
 
     options_enabled: z.boolean(),
     options_min_confidence: z.number().min(0).max(1),
     options_max_pct_per_trade: z.number().min(0).max(0.25),
-    options_max_total_exposure: z.number().min(0).max(0.5),
     options_min_dte: z.number().int().min(1).max(365),
     options_max_dte: z.number().int().min(1).max(365),
     options_target_delta: z.number().min(0.1).max(0.9),
@@ -40,7 +36,6 @@ export const AgentConfigSchema = z
     options_max_delta: z.number().min(0.1).max(0.9),
     options_stop_loss_pct: z.number().min(1).max(100),
     options_take_profit_pct: z.number().min(1).max(500),
-    options_max_positions: z.number().int().min(1).max(20),
 
     crypto_enabled: z.boolean(),
     crypto_symbols: z.array(z.string()),

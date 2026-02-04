@@ -129,16 +129,6 @@ export function SettingsModal({ config, onSave, onClose }: SettingsModalProps) {
                   onChange={e => handleChange('min_analyst_confidence', Number(e.target.value))}
                 />
               </div>
-              <div>
-                <label className="hud-label block mb-1">Sell Sentiment Threshold</label>
-                <input
-                  type="number"
-                  step="0.05"
-                  className="hud-input w-full"
-                  value={localConfig.sell_sentiment_threshold}
-                  onChange={e => handleChange('sell_sentiment_threshold', Number(e.target.value))}
-                />
-              </div>
             </div>
           </div>
 
@@ -436,16 +426,6 @@ export function SettingsModal({ config, onSave, onClose }: SettingsModalProps) {
                 />
               </div>
               <div>
-                <label className="hud-label block mb-1">Max Positions</label>
-                <input
-                  type="number"
-                  className="hud-input w-full"
-                  value={localConfig.options_max_positions || 3}
-                  onChange={e => handleChange('options_max_positions', Number(e.target.value))}
-                  disabled={!localConfig.options_enabled}
-                />
-              </div>
-              <div>
                 <label className="hud-label block mb-1">Stop Loss (%)</label>
                 <input
                   type="number"
@@ -586,17 +566,6 @@ export function SettingsModal({ config, onSave, onClose }: SettingsModalProps) {
                   disabled={!localConfig.stale_position_enabled}
                 />
                 <p className="text-[9px] text-hud-text-dim mt-1">Exit if volume drops to this % of entry</p>
-              </div>
-              <div>
-                <label className="hud-label block mb-1">No Mentions Hours</label>
-                <input
-                  type="number"
-                  className="hud-input w-full"
-                  value={localConfig.stale_no_mentions_hours || 8}
-                  onChange={e => handleChange('stale_no_mentions_hours', Number(e.target.value))}
-                  disabled={!localConfig.stale_position_enabled}
-                />
-                <p className="text-[9px] text-hud-text-dim mt-1">Exit if no mentions for N hours</p>
               </div>
             </div>
           </div>
