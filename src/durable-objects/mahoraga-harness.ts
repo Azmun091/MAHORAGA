@@ -854,6 +854,16 @@ export class MahoragaHarness extends DurableObject<Env> {
         }
       }
       this.initializeLLM();
+
+      // Reschedule alarm if stale - in local dev, past alarms don't fire on restart;
+      // in production this is a defensive check for edge cases (long inactivity, redeployments)
+      if (this.state.enabled) {
+        const existingAlarm = await this.ctx.storage.getAlarm();
+        const now = Date.now();
+        if (!existingAlarm || existingAlarm < now) {
+          await this.ctx.storage.setAlarm(now + 5_000);
+        }
+      }
     });
   }
 
