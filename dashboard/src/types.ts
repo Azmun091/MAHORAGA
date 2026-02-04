@@ -51,7 +51,6 @@ export interface CostTracker {
 }
 
 export interface Config {
-  mcp_url: string
   data_poll_interval_ms: number
   analyst_interval_ms: number
   max_position_value: number
