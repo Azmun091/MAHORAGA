@@ -96,5 +96,22 @@ module.exports = {
       error_file: path.resolve(__dirname, 'logs/health-monitor-error.log'),
       out_file: path.resolve(__dirname, 'logs/health-monitor-out.log'),
     },
+    {
+      name: 'twitter-autonomous-agent',
+      cwd: path.resolve(__dirname, 'twitter-agent'),
+      script: path.resolve(__dirname, 'twitter-agent', 'dist', 'index.js'),
+      interpreter: 'node',
+      ...nodeServiceDefaults,
+      restart_delay: 10000,
+      max_memory_restart: '1G',
+      env: {
+        ...env,
+        PORT: '8788',
+        CHROME_DEBUG_PORT: env.TWITTER_AGENT_CHROME_PORT || '9222',
+        NODE_ENV: 'production',
+      },
+      error_file: path.resolve(__dirname, 'logs/twitter-agent-error.log'),
+      out_file: path.resolve(__dirname, 'logs/twitter-agent-out.log'),
+    },
   ],
 };

@@ -20,6 +20,9 @@ export interface Env {
   LLM_PROVIDER?: "openai-raw" | "ai-sdk" | "cloudflare-gateway";
   LLM_MODEL?: string;
   TWITTER_BEARER_TOKEN?: string;
+  TWITTER_AGENT_URL?: string;
+  TWITTER_USE_AGENT?: string;
+  TWITTER_AGENT_CHROME_PORT?: string;
   DISCORD_WEBHOOK_URL?: string;
   MAHORAGA_API_TOKEN: string;
   KILL_SWITCH_SECRET: string;

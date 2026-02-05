@@ -219,6 +219,7 @@ interface AgentState {
   twitterConfirmations: Record<string, TwitterConfirmation>;
   twitterDailyReads: number;
   twitterDailyReadReset: number;
+  lastTwitterBreakingNewsCheck: number;
   premarketPlan: PremarketPlan | null;
   enabled: boolean;
 }
@@ -326,6 +327,7 @@ const DEFAULT_STATE: AgentState = {
   twitterConfirmations: {},
   twitterDailyReads: 0,
   twitterDailyReadReset: 0,
+  lastTwitterBreakingNewsCheck: 0,
   premarketPlan: null,
   enabled: false,
 };
@@ -940,15 +942,21 @@ export class MahoragaHarness extends DurableObject<Env> {
           }
         }
 
-        if (this.isTwitterEnabled()) {
+        // Check Twitter breaking news less frequently since agent takes ~4-5 minutes per search
+        // Interval: ~2.5x average response time to prevent queue buildup
+        const BREAKING_NEWS_INTERVAL_MS = 750_000; // 12.5 minutes (~2.5x avg response time)
+        if (this.isTwitterEnabled() && now - this.state.lastTwitterBreakingNewsCheck >= BREAKING_NEWS_INTERVAL_MS) {
           const heldSymbols = positions.map((p) => p.symbol);
-          const breakingNews = await this.checkTwitterBreakingNews(heldSymbols);
-          for (const news of breakingNews) {
-            if (news.is_breaking) {
-              this.log("System", "twitter_breaking_news", {
-                symbol: news.symbol,
-                headline: news.headline.slice(0, 100),
-              });
+          if (heldSymbols.length > 0) {
+            const breakingNews = await this.checkTwitterBreakingNews(heldSymbols);
+            this.state.lastTwitterBreakingNewsCheck = now;
+            for (const news of breakingNews) {
+              if (news.is_breaking) {
+                this.log("System", "twitter_breaking_news", {
+                  symbol: news.symbol,
+                  headline: news.headline.slice(0, 100),
+                });
+              }
             }
           }
         }
@@ -1938,7 +1946,16 @@ JSON response:
   // ============================================================================
 
   private isTwitterEnabled(): boolean {
-    return !!this.env.TWITTER_BEARER_TOKEN;
+    // Check if using agent or API
+    const useAgent = this.env.TWITTER_USE_AGENT === "true";
+    const hasAgentUrl = !!this.env.TWITTER_AGENT_URL;
+    const hasBearerToken = !!this.env.TWITTER_BEARER_TOKEN;
+    
+    return useAgent ? hasAgentUrl : hasBearerToken;
+  }
+
+  private useTwitterAgent(): boolean {
+    return this.env.TWITTER_USE_AGENT === "true" && !!this.env.TWITTER_AGENT_URL;
   }
 
   private canSpendTwitterRead(): boolean {
@@ -1978,6 +1995,97 @@ JSON response:
   > {
     if (!this.isTwitterEnabled() || !this.canSpendTwitterRead()) return [];
 
+    // Use agent if configured
+    if (this.useTwitterAgent()) {
+      return await this.twitterSearchViaAgent(query, maxResults);
+    }
+
+    // Fallback to API
+    return await this.twitterSearchViaAPI(query, maxResults);
+  }
+
+  private async twitterSearchViaAgent(
+    query: string,
+    maxResults: number
+  ): Promise<
+    Array<{
+      id: string;
+      text: string;
+      created_at: string;
+      author: string;
+      author_followers: number;
+      retweets: number;
+      likes: number;
+    }>
+  > {
+    try {
+      const agentUrl = this.env.TWITTER_AGENT_URL || "http://localhost:8788";
+      const res = await fetch(`${agentUrl}/twitter/search`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ query, maxResults }),
+      });
+
+      if (!res.ok) {
+        this.log("Twitter", "agent_error", { status: res.status });
+        // Fallback to API if agent fails
+        if (this.env.TWITTER_BEARER_TOKEN) {
+          this.log("Twitter", "fallback_to_api", { reason: "agent_failed" });
+          return await this.twitterSearchViaAPI(query, maxResults);
+        }
+        return [];
+      }
+
+      const data = (await res.json()) as {
+        success: boolean;
+        tweets?: Array<{
+          id: string;
+          text: string;
+          created_at: string;
+          author: string;
+          retweets: number;
+          likes: number;
+        }>;
+      };
+
+      this.spendTwitterRead(1);
+
+      return (data.tweets || []).map((tweet) => ({
+        id: tweet.id,
+        text: tweet.text,
+        created_at: tweet.created_at,
+        author: tweet.author,
+        author_followers: 0, // Not available from browser agent
+        retweets: tweet.retweets || 0,
+        likes: tweet.likes || 0,
+      }));
+    } catch (error) {
+      this.log("Twitter", "agent_error", { message: String(error) });
+      // Fallback to API if agent fails
+      if (this.env.TWITTER_BEARER_TOKEN) {
+        this.log("Twitter", "fallback_to_api", { reason: "agent_error" });
+        return await this.twitterSearchViaAPI(query, maxResults);
+      }
+      return [];
+    }
+  }
+
+  private async twitterSearchViaAPI(
+    query: string,
+    maxResults: number
+  ): Promise<
+    Array<{
+      id: string;
+      text: string;
+      created_at: string;
+      author: string;
+      author_followers: number;
+      retweets: number;
+      likes: number;
+    }>
+  > {
     try {
       const params = new URLSearchParams({
         query,
@@ -2041,7 +2149,9 @@ JSON response:
     existingSentiment: number
   ): Promise<TwitterConfirmation | null> {
     const MIN_SENTIMENT_FOR_CONFIRMATION = 0.3;
-    const CACHE_TTL_MS = 300_000;
+    // Cache TTL: ~5x average agent response time (~5 min) = 25 minutes
+    // This prevents redundant calls since agent takes ~4-5 minutes per search
+    const CACHE_TTL_MS = 1_500_000; // 25 minutes
 
     if (!this.isTwitterEnabled() || !this.canSpendTwitterRead()) return null;
     if (Math.abs(existingSentiment) < MIN_SENTIMENT_FOR_CONFIRMATION) return null;
