@@ -1615,7 +1615,11 @@ export class MahoragaHarness extends DurableObject<Env> {
 
         await this.sleep(200);
       } catch (error) {
-        this.log("Crypto", "error", { symbol, message: String(error) });
+        const msg = String(error);
+        // Alpaca only supports a subset of pairs; "No crypto snapshot data" = symbol not tradeable, skip without error log
+        if (!msg.includes("No crypto snapshot data")) {
+          this.log("Crypto", "error", { symbol, message: msg });
+        }
       }
     }
 
