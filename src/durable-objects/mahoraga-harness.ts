@@ -37,6 +37,11 @@
 
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env.d";
+import {
+  extractExplicitTickers as extractExplicitTickersLib,
+  hasPressWireKeyword,
+  parseRssOrAtomItems as parseRssOrAtomItemsLib,
+} from "../lib/feed-parsers";
 import { createAlpacaProviders } from "../providers/alpaca";
 import { createLLMProvider } from "../providers/llm/factory";
 import type { Account, LLMProvider, MarketClock, Position } from "../providers/types";
@@ -218,6 +223,8 @@ interface AgentState {
   lastTwitterBreakingNewsCheck: number;
   premarketPlan: PremarketPlan | null;
   enabled: boolean;
+  /** Last-seen item id/guid per source_detail for RSS/Atom/JSON feed dedupe */
+  lastSeen: Record<string, string>;
 }
 
 // ============================================================================
@@ -234,7 +241,13 @@ const SOURCE_CONFIG = {
     twitter_news: 0.9,
     sec_8k: 0.95,
     sec_4: 0.9,
+    sec_6k: 0.85,
     sec_13f: 0.7,
+    news_wire: 0.9,
+    regulatory: 0.85,
+    exchange_listing: 0.95,
+    governance: 0.7,
+    dev_activity: 0.65,
   },
   // [TUNE] Reddit flair multipliers - boost/penalize based on post type
   flairMultipliers: {
@@ -321,6 +334,7 @@ const DEFAULT_STATE: AgentState = {
   lastTwitterBreakingNewsCheck: 0,
   premarketPlan: null,
   enabled: false,
+  lastSeen: {},
 };
 
 // Blacklist for ticker extraction - common English words and trading slang
@@ -838,6 +852,9 @@ export class MahoragaHarness extends DurableObject<Env> {
       const stored = await this.ctx.storage.get<AgentState>("state");
       if (stored) {
         this.state = { ...DEFAULT_STATE, ...stored };
+        if (typeof this.state.lastSeen !== "object" || this.state.lastSeen === null) {
+          this.state.lastSeen = {};
+        }
         // If agent is enabled, ensure alarm is scheduled
         if (this.state.enabled) {
           await this.scheduleNextAlarm();
@@ -1257,16 +1274,41 @@ export class MahoragaHarness extends DurableObject<Env> {
 
     await tickerCache.refreshSecTickersIfNeeded();
 
-    const [stocktwitsSignals, redditSignals, cryptoSignals, secSignals] = await Promise.all([
+    const [
+      stocktwitsSignals,
+      redditSignals,
+      cryptoSignals,
+      secSignals,
+      pressWireSignals,
+      regulatorySignals,
+      binanceSignals,
+      snapshotSignals,
+      githubSignals,
+    ] = await Promise.all([
       this.gatherStockTwits(),
       this.gatherReddit(),
       this.gatherCrypto(),
       this.gatherSECFilings(),
+      this.gatherPressWires(),
+      this.gatherRegulatoryFeeds(),
+      this.gatherBinanceAnnouncements(),
+      this.gatherSnapshotGovernance(),
+      this.gatherGitHubReleases(),
     ]);
 
-    const allSignals = [...stocktwitsSignals, ...redditSignals, ...cryptoSignals, ...secSignals];
+    const allSignals = [
+      ...stocktwitsSignals,
+      ...redditSignals,
+      ...cryptoSignals,
+      ...secSignals,
+      ...pressWireSignals,
+      ...regulatorySignals,
+      ...binanceSignals,
+      ...snapshotSignals,
+      ...githubSignals,
+    ];
 
-    const MAX_SIGNALS = 200;
+    const MAX_SIGNALS = 300;
     const MAX_AGE_MS = 24 * 60 * 60 * 1000;
     const now = Date.now();
 
@@ -1282,6 +1324,11 @@ export class MahoragaHarness extends DurableObject<Env> {
       reddit: redditSignals.length,
       crypto: cryptoSignals.length,
       sec: secSignals.length,
+      pressWires: pressWireSignals.length,
+      regulatory: regulatorySignals.length,
+      binance: binanceSignals.length,
+      snapshot: snapshotSignals.length,
+      github: githubSignals.length,
       total: this.state.signalCache.length,
     });
   }
@@ -1576,31 +1623,32 @@ export class MahoragaHarness extends DurableObject<Env> {
     return signals;
   }
 
+  private async fetchSECAtomFeed(formType: string): Promise<Array<{ id: string; title: string; updated: string; form: string; company: string }>> {
+    const url = `https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=${encodeURIComponent(formType)}&company=&dateb=&owner=include&count=40&output=atom`;
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": "Mahoraga Trading Bot (contact@example.com)",
+        Accept: "application/atom+xml",
+      },
+    });
+    if (!response.ok) return [];
+    const text = await response.text();
+    return this.parseSECAtomFeed(text);
+  }
+
   private async gatherSECFilings(): Promise<Signal[]> {
     const signals: Signal[] = [];
 
     try {
-      const response = await fetch(
-        "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&company=&dateb=&owner=include&count=40&output=atom",
-        {
-          headers: {
-            "User-Agent": "Mahoraga Trading Bot (contact@example.com)",
-            Accept: "application/atom+xml",
-          },
-        }
-      );
+      const [entries8K, entries6K] = await Promise.all([
+        this.fetchSECAtomFeed("8-K"),
+        this.fetchSECAtomFeed("6-K"),
+      ]);
 
-      if (!response.ok) {
-        this.log("SEC", "fetch_error", { status: response.status });
-        return signals;
-      }
-
-      const text = await response.text();
-      const entries = this.parseSECAtomFeed(text);
-
+      const entries = [...entries8K.slice(0, 15), ...entries6K.slice(0, 10)];
       const alpaca = createAlpacaProviders(this.env);
 
-      for (const entry of entries.slice(0, 15)) {
+      for (const entry of entries) {
         const ticker = await this.resolveTickerFromCompanyName(entry.company);
         if (!ticker) continue;
 
@@ -1611,23 +1659,32 @@ export class MahoragaHarness extends DurableObject<Env> {
           if (!isValid) continue;
         }
 
-        const sourceWeight = entry.form === "8-K" ? SOURCE_CONFIG.weights.sec_8k : SOURCE_CONFIG.weights.sec_4;
+        const formKey = entry.form.toLowerCase().replace("-", "");
+        const sourceWeight =
+          entry.form === "8-K"
+            ? SOURCE_CONFIG.weights.sec_8k
+            : entry.form === "6-K"
+              ? (SOURCE_CONFIG.weights as Record<string, number>).sec_6k ?? 0.85
+              : (SOURCE_CONFIG.weights as Record<string, number>).sec_4 ?? 0.9;
         const freshness = this.calculateSECFreshness(entry.updated);
-
-        const sentiment = entry.form === "8-K" ? 0.3 : 0.2;
+        const sentiment = entry.form === "8-K" ? 0.3 : entry.form === "6-K" ? 0.3 : 0.2;
         const weightedSentiment = sentiment * sourceWeight * freshness;
+        const timestampMs = new Date(entry.updated).getTime();
+        // Cap age so SEC signals stay in cache at least 12h (avoid dropping by MAX_AGE_MS when feed has old updated dates)
+        const cacheTimestamp =
+          Number.isNaN(timestampMs) ? Date.now() : Math.max(timestampMs, Date.now() - 12 * 60 * 60 * 1000);
 
         signals.push({
           symbol: ticker,
           source: "sec_edgar",
-          source_detail: `sec_${entry.form.toLowerCase().replace("-", "")}`,
+          source_detail: `sec_${formKey}`,
           sentiment: weightedSentiment,
           raw_sentiment: sentiment,
           volume: 1,
           freshness,
           source_weight: sourceWeight,
           reason: `SEC ${entry.form}: ${entry.company.slice(0, 50)}`,
-          timestamp: Date.now(),
+          timestamp: cacheTimestamp,
         });
       }
 
@@ -1735,6 +1792,401 @@ export class MahoragaHarness extends DurableObject<Env> {
     if (ageHours < 12) return 0.7;
     if (ageHours < 24) return 0.5;
     return 0.3;
+  }
+
+  // Press wire RSS/Atom feed URLs (trusted sources)
+  private static PRESS_WIRE_FEEDS: Array<{ url: string; sourceDetail: string }> = [
+    { url: "https://www.globenewswire.com/RssFeed/company/0/ticker/0", sourceDetail: "globenewswire" },
+    { url: "https://feed.businesswire.com/rss/home/?rss=G1QFDERJXkJeEFtRWw==", sourceDetail: "businesswire" },
+  ];
+
+  private async gatherPressWires(): Promise<Signal[]> {
+    const signals: Signal[] = [];
+    const alpaca = createAlpacaProviders(this.env);
+    const weight = (SOURCE_CONFIG.weights as Record<string, number>).news_wire ?? 0.9;
+
+    for (const feed of MahoragaHarness.PRESS_WIRE_FEEDS) {
+      try {
+        const res = await fetch(feed.url, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (compatible; Mahoraga/1.0)",
+            Accept: "application/rss+xml, application/atom+xml, application/xml, text/xml",
+          },
+        });
+        if (!res.ok) continue;
+        const text = await res.text();
+        const items = parseRssOrAtomItemsLib(text);
+        const lastSeenKey = `press_${feed.sourceDetail}`;
+        const lastSeenId = this.state.lastSeen[lastSeenKey];
+        let newLastSeenId: string | null = null;
+
+        for (const item of items.slice(0, 25)) {
+          if (lastSeenId && item.id === lastSeenId) break;
+          if (!newLastSeenId) newLastSeenId = item.id;
+
+          const combined = `${item.title} ${item.description}`;
+          if (!hasPressWireKeyword(combined)) continue;
+
+          const tickers = extractExplicitTickersLib(combined, TICKER_BLACKLIST);
+          if (tickers.length === 0) continue;
+
+          const freshness = this.calculateSECFreshness(item.published);
+          const rawSentiment = 0.3;
+          const weightedSentiment = rawSentiment * weight * freshness;
+          const timestampMs = new Date(item.published).getTime();
+
+          for (const ticker of tickers) {
+            const cached = tickerCache.getCachedValidation(ticker);
+            if (cached === false) continue;
+            if (cached === undefined) {
+              const isValid = await tickerCache.validateWithAlpaca(ticker, alpaca);
+              if (!isValid) continue;
+            }
+            signals.push({
+              symbol: ticker,
+              source: "news_wire",
+              source_detail: feed.sourceDetail,
+              sentiment: weightedSentiment,
+              raw_sentiment: rawSentiment,
+              volume: 1,
+              freshness,
+              source_weight: weight,
+              reason: `PR: ${item.title.slice(0, 80)}`,
+              timestamp: Number.isNaN(timestampMs) ? Date.now() : timestampMs,
+            });
+          }
+        }
+        if (newLastSeenId) {
+          this.state.lastSeen[lastSeenKey] = newLastSeenId;
+        }
+      } catch (error) {
+        this.log("PressWires", "error", { source: feed.sourceDetail, message: String(error) });
+      }
+    }
+
+    this.log("PressWires", "gathered_signals", { count: signals.length });
+    return signals;
+  }
+
+  private static REGULATORY_FEEDS: Array<{ url: string; sourceDetail: string }> = [
+    { url: "https://www.justice.gov/news/rss.xml", sourceDetail: "doj" },
+    { url: "https://www.ftc.gov/news-events/news/rss.xml", sourceDetail: "ftc" },
+    { url: "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/press-releases/rss.xml", sourceDetail: "fda" },
+  ];
+
+  private async gatherRegulatoryFeeds(): Promise<Signal[]> {
+    const signals: Signal[] = [];
+    const alpaca = createAlpacaProviders(this.env);
+    const weight = (SOURCE_CONFIG.weights as Record<string, number>).regulatory ?? 0.85;
+
+    for (const feed of MahoragaHarness.REGULATORY_FEEDS) {
+      try {
+        const res = await fetch(feed.url, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (compatible; Mahoraga/1.0)",
+            Accept: "application/rss+xml, application/atom+xml, application/xml, text/xml",
+          },
+        });
+        if (!res.ok) continue;
+        const text = await res.text();
+        const items = parseRssOrAtomItemsLib(text);
+        const lastSeenKey = `reg_${feed.sourceDetail}`;
+        const lastSeenId = this.state.lastSeen[lastSeenKey];
+        let newLastSeenId: string | null = null;
+
+        for (const item of items.slice(0, 20)) {
+          if (lastSeenId && item.id === lastSeenId) break;
+          if (!newLastSeenId) newLastSeenId = item.id;
+
+          const combined = `${item.title} ${item.description}`;
+          const tickers = extractExplicitTickersLib(combined, TICKER_BLACKLIST);
+          if (tickers.length === 0) continue;
+
+          const isNegative = /\b(sues?|charges?|blocks?|fines?|penalty|investigation|violation)\b/i.test(combined);
+          const rawSentiment = isNegative ? -0.2 : 0.15;
+          const freshness = this.calculateSECFreshness(item.published);
+          const weightedSentiment = rawSentiment * weight * freshness;
+          const timestampMs = new Date(item.published).getTime();
+
+          for (const ticker of tickers) {
+            const cached = tickerCache.getCachedValidation(ticker);
+            if (cached === false) continue;
+            if (cached === undefined) {
+              const isValid = await tickerCache.validateWithAlpaca(ticker, alpaca);
+              if (!isValid) continue;
+            }
+            signals.push({
+              symbol: ticker,
+              source: "regulatory",
+              source_detail: feed.sourceDetail,
+              sentiment: weightedSentiment,
+              raw_sentiment: rawSentiment,
+              volume: 1,
+              freshness,
+              source_weight: weight,
+              reason: `Regulatory (${feed.sourceDetail}): ${item.title.slice(0, 60)}`,
+              timestamp: Number.isNaN(timestampMs) ? Date.now() : timestampMs,
+            });
+          }
+        }
+        if (newLastSeenId) {
+          this.state.lastSeen[lastSeenKey] = newLastSeenId;
+        }
+      } catch (error) {
+        this.log("Regulatory", "error", { source: feed.sourceDetail, message: String(error) });
+      }
+    }
+
+    this.log("Regulatory", "gathered_signals", { count: signals.length });
+    return signals;
+  }
+
+  /**
+   * Binance new-listing signals via official public API (no auth).
+   * Open symbol list: GET api.binance.com/sapi/v1/spot/open-symbol-list (free, no key)
+   */
+  private async gatherBinanceAnnouncements(): Promise<Signal[]> {
+    const signals: Signal[] = [];
+    if (!this.state.config.crypto_enabled) return signals;
+    const alpaca = createAlpacaProviders(this.env);
+    const weight = (SOURCE_CONFIG.weights as Record<string, number>).exchange_listing ?? 0.95;
+    const baseUrl = "https://api.binance.com";
+
+    try {
+      const openRes = await fetch(`${baseUrl}/sapi/v1/spot/open-symbol-list`, {
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; Mahoraga/1.0)", Accept: "application/json" },
+      });
+      const openList: Array<{ openTime: number; symbols: string[] }> =
+        openRes.ok ? (await openRes.json()) : [];
+      if (!openRes.ok) {
+        this.log("Binance", "fetch_error", { status: openRes.status, endpoint: "open-symbol-list" });
+        this.log("Binance", "gathered_signals", { count: 0 });
+        return signals;
+      }
+
+      const lastSeenKey = "binance_ann";
+      const seen = new Set<string>();
+
+      for (const item of openList) {
+        for (const sym of item.symbols ?? []) {
+          const base = sym.replace(/USDT$/i, "").replace(/BUSD$/i, "");
+          if (!base || base.length < 2 || base.length > 10) continue;
+          const normalized = `${base}/USD`;
+          if (seen.has(normalized)) continue;
+          seen.add(normalized);
+          let tradable = false;
+          try {
+            await alpaca.marketData.getCryptoSnapshot(normalized);
+            tradable = true;
+          } catch {
+            // not tradeable on Alpaca
+          }
+          if (!tradable) continue;
+          const freshness = this.calculateSECFreshness(new Date(item.openTime).toISOString());
+          const rawSentiment = 0.6;
+          signals.push({
+            symbol: normalized,
+            source: "exchange_listing",
+            source_detail: "binance_list",
+            sentiment: rawSentiment * weight * freshness,
+            raw_sentiment: rawSentiment,
+            volume: 1,
+            freshness,
+            source_weight: weight,
+            reason: `Binance list: ${base} (${new Date(item.openTime).toISOString().slice(0, 10)})`,
+            timestamp: item.openTime,
+            isCrypto: true,
+          });
+        }
+      }
+
+      if (openList.length > 0) {
+        this.state.lastSeen[lastSeenKey] = `${openList.length}_${Date.now()}`;
+      }
+      this.log("Binance", "gathered_signals", { count: signals.length });
+    } catch (error) {
+      this.log("Binance", "error", { message: String(error) });
+      this.log("Binance", "gathered_signals", { count: 0 });
+    }
+    return signals;
+  }
+
+  private static SNAPSHOT_SPACE_TO_SYMBOL: Record<string, string> = {
+    uniswap: "UNI",
+    "uniswap.eth": "UNI",
+    aave: "AAVE",
+    "aave.eth": "AAVE",
+    compound: "COMP",
+    "compound.eth": "COMP",
+    makerdao: "MKR",
+    "maker.eth": "MKR",
+    lido: "LDO",
+    "lido.eth": "LDO",
+    arbitrum: "ARB",
+    optimism: "OP",
+  };
+
+  private async gatherSnapshotGovernance(): Promise<Signal[]> {
+    const signals: Signal[] = [];
+    if (!this.state.config.crypto_enabled) return signals;
+    const alpaca = createAlpacaProviders(this.env);
+    const weight = (SOURCE_CONFIG.weights as Record<string, number>).governance ?? 0.7;
+    // Snapshot API expects space ids like "uniswap.eth"; use only .eth ids to avoid 400
+    const spaces = Object.keys(MahoragaHarness.SNAPSHOT_SPACE_TO_SYMBOL).filter((id) => id.includes(".eth"));
+
+    try {
+      const query = `query { proposals(first: 15, where: { space_in: ${JSON.stringify(spaces)}, state: "open" }, orderBy: "created", orderDirection: desc) { id title body state space { id } start end } }`;
+      const res = await fetch("https://hub.snapshot.org/graphql", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": "Mozilla/5.0 (compatible; Mahoraga/1.0)",
+          Origin: "https://snapshot.org",
+          Referer: "https://snapshot.org/",
+        },
+        body: JSON.stringify({ query }),
+      });
+      if (!res.ok) {
+        this.log("Snapshot", "fetch_error", { status: res.status });
+        this.log("Snapshot", "gathered_signals", { count: 0 });
+        return signals;
+      }
+      const json = (await res.json()) as {
+        data?: { proposals?: Array<{ id: string; title: string; body: string; space?: { id?: string } }> };
+      };
+      const proposals = json.data?.proposals ?? [];
+      const lastSeenKey = "snapshot_governance";
+      const lastSeenId = this.state.lastSeen[lastSeenKey];
+      let newLastSeenId: string | null = null;
+
+      for (const p of proposals.slice(0, 10)) {
+        if (lastSeenId && p.id === lastSeenId) break;
+        if (!newLastSeenId) newLastSeenId = p.id;
+
+        const spaceId = (typeof p.space === "string" ? p.space : p.space?.id) ?? "";
+        const symbol = MahoragaHarness.SNAPSHOT_SPACE_TO_SYMBOL[spaceId.toLowerCase()];
+        if (!symbol) continue;
+
+        const normalized = `${symbol}/USD`;
+        let tradable = false;
+        try {
+          await alpaca.marketData.getCryptoSnapshot(normalized);
+          tradable = true;
+        } catch {
+          // not tradeable on Alpaca
+        }
+        if (!tradable) continue;
+
+        const text = `${p.title ?? ""} ${p.body ?? ""}`.toLowerCase();
+        const hasTokenomics = /fee|buyback|burn|reward|treasury|grant/i.test(text);
+        const rawSentiment = hasTokenomics ? 0.2 : 0.1;
+        const freshness = 1.0;
+        const weightedSentiment = rawSentiment * weight * freshness;
+
+        signals.push({
+          symbol: normalized,
+          source: "governance",
+          source_detail: "snapshot",
+          sentiment: weightedSentiment,
+          raw_sentiment: rawSentiment,
+          volume: 1,
+          freshness,
+          source_weight: weight,
+          reason: `Snapshot: ${(p.title ?? "").slice(0, 50)}`,
+          timestamp: Date.now(),
+          isCrypto: true,
+        });
+      }
+      if (newLastSeenId) {
+        this.state.lastSeen[lastSeenKey] = newLastSeenId;
+      }
+      this.log("Snapshot", "gathered_signals", { count: signals.length });
+    } catch (error) {
+      this.log("Snapshot", "error", { message: String(error) });
+      this.log("Snapshot", "gathered_signals", { count: 0 });
+    }
+    return signals;
+  }
+
+  private static GITHUB_REPO_TO_SYMBOL: Record<string, string> = {
+    "ethereum/go-ethereum": "ETH",
+    "bitcoin/bitcoin": "BTC",
+    "solana-labs/solana": "SOL",
+    "aptos-labs/aptos-core": "APT",
+    "OffchainLabs/arbitrum": "ARB",
+    "ethereum-optimism/optimism": "OP",
+    "MystenLabs/sui": "SUI",
+    "ava-labs/avalanchego": "AVAX",
+    "maticnetwork/bor": "MATIC",
+    "smartcontractkit/chainlink": "LINK",
+    "Uniswap/v3-core": "UNI",
+    "aave/aave-v3-core": "AAVE",
+  };
+
+  private async gatherGitHubReleases(): Promise<Signal[]> {
+    const signals: Signal[] = [];
+    if (!this.state.config.crypto_enabled) return signals;
+    const alpaca = createAlpacaProviders(this.env);
+    const weight = (SOURCE_CONFIG.weights as Record<string, number>).dev_activity ?? 0.65;
+
+    for (const [repo, symbol] of Object.entries(MahoragaHarness.GITHUB_REPO_TO_SYMBOL)) {
+      try {
+        const [owner, name] = repo.split("/");
+        if (!owner || !name) continue;
+        const url = `https://github.com/${owner}/${name}/releases.atom`;
+        const res = await fetch(url, {
+          headers: { "User-Agent": "Mozilla/5.0 (compatible; Mahoraga/1.0)" },
+        });
+        if (!res.ok) continue;
+        const text = await res.text();
+        const items = parseRssOrAtomItemsLib(text);
+        const lastSeenKey = `github_${repo.replace("/", "_")}`;
+        const lastSeenId = this.state.lastSeen[lastSeenKey];
+        let newLastSeenId: string | null = null;
+
+        for (const item of items.slice(0, 3)) {
+          if (lastSeenId && item.id === lastSeenId) break;
+          if (!newLastSeenId) newLastSeenId = item.id;
+
+          const normalized = `${symbol}/USD`;
+          let tradable = false;
+          try {
+            await alpaca.marketData.getCryptoSnapshot(normalized);
+            tradable = true;
+          } catch {
+            // not tradeable on Alpaca
+          }
+          if (!tradable) continue;
+
+          const rawSentiment = 0.15;
+          const freshness = this.calculateSECFreshness(item.published);
+          const weightedSentiment = rawSentiment * weight * freshness;
+          const timestampMs = new Date(item.published).getTime();
+
+          signals.push({
+            symbol: normalized,
+            source: "dev_activity",
+            source_detail: "github_release",
+            sentiment: weightedSentiment,
+            raw_sentiment: rawSentiment,
+            volume: 1,
+            freshness,
+            source_weight: weight,
+            reason: `GitHub: ${item.title.slice(0, 50)}`,
+            timestamp: Number.isNaN(timestampMs) ? Date.now() : timestampMs,
+            isCrypto: true,
+          });
+        }
+        if (newLastSeenId) {
+          this.state.lastSeen[lastSeenKey] = newLastSeenId;
+        }
+      } catch (error) {
+        this.log("GitHubReleases", "error", { repo, message: String(error) });
+      }
+    }
+
+    this.log("GitHubReleases", "gathered_signals", { count: signals.length });
+    return signals;
   }
 
   private async runCryptoTrading(
