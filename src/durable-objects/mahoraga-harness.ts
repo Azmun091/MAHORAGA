@@ -40,6 +40,7 @@ import type { Env } from "../env.d";
 import { createAlpacaProviders } from "../providers/alpaca";
 import { createLLMProvider } from "../providers/llm/factory";
 import type { Account, LLMProvider, MarketClock, Position } from "../providers/types";
+import { Client } from "@xdevplatform/xdk";
 
 // ============================================================================
 // SECTION 1: TYPES & CONFIGURATION
@@ -2087,9 +2088,79 @@ JSON response:
     }>
   > {
     try {
+      if (!this.env.TWITTER_BEARER_TOKEN) {
+        this.log("Twitter", "error", { message: "TWITTER_BEARER_TOKEN not configured" });
+        return [];
+      }
+
+      // Initialize X SDK Client
+      // Note: Cloudflare Workers use global fetch, which the SDK should support
+      const client = new Client({ 
+        bearerToken: this.env.TWITTER_BEARER_TOKEN,
+        // Pass fetch from global scope for Cloudflare Workers compatibility
+        fetch: globalThis.fetch
+      });
+
+      // Use posts.searchRecent (X API v2 endpoint)
+      // maxResults must be between 10 and 100 for the API
+      const apiMaxResults = Math.max(10, Math.min(maxResults, 100));
+      
+      const response = await client.posts.searchRecent(query, {
+        maxResults: apiMaxResults,
+        tweetFields: ['created_at', 'public_metrics', 'author_id'],
+        expansions: ['author_id'],
+        userFields: ['username', 'public_metrics'],
+      });
+
+      if (!response.data) {
+        this.log("Twitter", "api_error", { message: "No data in response" });
+        return [];
+      }
+
+      this.spendTwitterRead(1);
+
+      // Map response to expected format
+      // Note: SDK uses camelCase (authorId, createdAt, publicMetrics) instead of snake_case
+      return (response.data || []).map((tweet) => {
+        const user = response.includes?.users?.find((u) => u.id === tweet.authorId);
+        return {
+          id: tweet.id || `tweet_${Date.now()}_${Math.random()}`,
+          text: tweet.text || "",
+          created_at: tweet.createdAt || new Date().toISOString(),
+          author: user?.username || "unknown",
+          author_followers: user?.publicMetrics?.followersCount || 0,
+          retweets: tweet.publicMetrics?.retweetCount || 0,
+          likes: tweet.publicMetrics?.likeCount || 0,
+        };
+      }).slice(0, maxResults); // Ensure we don't return more than requested
+    } catch (error) {
+      this.log("Twitter", "error", { message: String(error) });
+      // Fallback to direct fetch if SDK fails (for compatibility)
+      return await this.twitterSearchViaAPIFallback(query, maxResults);
+    }
+  }
+
+  /**
+   * Fallback implementation using direct fetch (if SDK fails)
+   */
+  private async twitterSearchViaAPIFallback(
+    query: string,
+    maxResults: number
+  ): Promise<
+    Array<{
+      id: string;
+      text: string;
+      created_at: string;
+      author: string;
+      author_followers: number;
+      retweets: number;
+      likes: number;
+    }>
+  > {
+    try {
       const params = new URLSearchParams({
         query,
-        max_results: Math.min(maxResults, 10).toString(),
+        max_results: Math.max(10, Math.min(maxResults, 100)).toString(),
         "tweet.fields": "created_at,public_metrics,author_id",
         expansions: "author_id",
         "user.fields": "username,public_metrics",
@@ -2137,9 +2208,9 @@ JSON response:
           retweets: tweet.public_metrics?.retweet_count || 0,
           likes: tweet.public_metrics?.like_count || 0,
         };
-      });
+      }).slice(0, maxResults);
     } catch (error) {
-      this.log("Twitter", "error", { message: String(error) });
+      this.log("Twitter", "fallback_error", { message: String(error) });
       return [];
     }
   }
